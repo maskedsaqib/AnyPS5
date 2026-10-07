@@ -19,6 +19,7 @@
 
 #if defined(__linux__)
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <unistd.h>
 #include <fstream>
 #include <sstream>
@@ -220,6 +221,21 @@ void Trace(const char* format, ...) {
     va_end(args);
 }
 
+#ifndef _WIN32
+bool RaiseOpenFileLimit() {
+    rlimit limit{};
+    if (getrlimit(RLIMIT_NOFILE, &limit) != 0 || limit.rlim_cur >= limit.rlim_max) return false;
+    limit.rlim_cur = limit.rlim_max;
+    return setrlimit(RLIMIT_NOFILE, &limit) == 0;
+}
+
+int CreateBackingFile() {
+    static const bool raised = RaiseOpenFileLimit();
+    static_cast<void>(raised);
+    return memfd_create("direct memory", MFD_CLOEXEC);
+}
+#endif
+
 class PhysicalBacking {
 public:
     explicit PhysicalBacking(std::size_t bytes, int memoryType) : memoryType(memoryType) {
@@ -233,7 +249,7 @@ public:
             throw std::system_error(error, std::system_category(), message);
         }
 #else
-        file = memfd_create("direct memory", MFD_CLOEXEC);
+        file = CreateBackingFile();
         if (file < 0) throw std::system_error(errno, std::generic_category(), "create direct memory backing");
         if (ftruncate(file, static_cast<off_t>(bytes)) != 0) {
             const int error = errno;
